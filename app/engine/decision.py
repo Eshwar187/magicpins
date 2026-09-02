@@ -83,10 +83,10 @@ class Decision:
     score: float
     primary_reason: str
     evidence_facts: Tuple[Fact, ...]
-    derived_signals: Tuple[str, ...]
-    supporting_offer: Optional[Dict[str, Any]]
-    next_step: str
-    trace: DecisionTrace
+    supporting_offer: Optional[Dict[str, Any]] = None
+    next_step: str = ""
+    derived_signals: Tuple[str, ...] = ()
+    trace: Optional[DecisionTrace] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -100,5 +100,5 @@ class Decision:
             "derived_signals": list(self.derived_signals),
             "supporting_offer": self.supporting_offer,
             "next_step": self.next_step,
-            "trace": self.trace.to_dict(),
+            "trace": self.trace.to_dict() if self.trace else None,
         }
