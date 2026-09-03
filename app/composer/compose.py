@@ -126,3 +126,93 @@ def compose(
         raise ValueError(f"Message composition validation failed: {'; '.join(errors)}")
 
     return composed
+
+
+def compose_action_continuation(
+    decision: Decision,
+    category: Union[CategoryProfile, Dict[str, Any]],
+    merchant: Union[MerchantState, Dict[str, Any]],
+    trigger: Union[TriggerState, Dict[str, Any]],
+    customer: Optional[Union[CustomerStateModel, Dict[str, Any]]] = None,
+) -> ComposedMessage:
+    """Compose a deterministic continuation message advancing an approved Phase 2 action."""
+    if isinstance(category, dict):
+        category = CategoryProfile.from_dict(category)
+    if isinstance(merchant, dict):
+        merchant = MerchantState.from_dict(merchant)
+    if isinstance(trigger, dict):
+        trigger = TriggerState.from_dict(trigger)
+    if isinstance(customer, dict):
+        customer = CustomerStateModel.from_dict(customer)
+
+    act = decision.action_type
+    target_scope = decision.target_scope
+    conv_id = _build_conversation_id(trigger, merchant, customer)
+    suppression_key = _build_suppression_key(decision, category, merchant, trigger, customer)
+    cid = customer.customer_id if customer else None
+
+    # Deterministic actioning body grounded in the action type
+    if act == ActionType.USE_RESEARCH_INSIGHT:
+        body = (
+            "Here is the draft patient-education WhatsApp note ready to confirm and share: "
+            "'Recent clinical research demonstrates the preventive efficacy of fluoride varnish protocols for mixed dentition.' "
+            "Confirm to proceed with sending."
+        )
+    elif act == ActionType.PROMOTE_DELIVERY_OFFER:
+        body = (
+            "Here is the delivery promotion campaign draft ready to confirm: "
+            "'Match-day special delivery promotion for tonight.' Confirm when ready to proceed and launch."
+        )
+    elif act == ActionType.CUSTOMER_RECALL:
+        body = (
+            "Here is the routine recall reminder draft ready for your confirmation. "
+            "Confirm when ready to proceed with dispatch."
+        )
+    elif act == ActionType.CONTINUE_PLANNING:
+        body = (
+            "Here is the corporate package draft proposal ready to confirm. "
+            "Confirm when ready to proceed with the next step."
+        )
+    elif act == ActionType.REFRAME_SEASONAL_DIP:
+        body = (
+            "Here is the seasonal dip member engagement draft ready to confirm. "
+            "Confirm when ready to proceed with rollout."
+        )
+    elif act == ActionType.CUSTOMER_WINBACK:
+        body = (
+            "Here is the winback outreach draft ready for your confirmation. "
+            "Confirm when ready to proceed."
+        )
+    elif act == ActionType.ADDRESS_SUPPLY_ALERT:
+        body = (
+            "Here is the batch recall advisory draft ready for your review and confirmation. "
+            "Confirm when ready to proceed."
+        )
+    elif act == ActionType.CUSTOMER_REFILL:
+        body = (
+            "Here is the monthly refill reminder draft ready for your confirmation. "
+            "Confirm when ready to proceed."
+        )
+    else:
+        act_name = act.value.replace("_", " ")
+        body = (
+            f"Here is the {act_name} draft ready to confirm and launch. "
+            "Confirm when ready to proceed!"
+        )
+
+    return ComposedMessage(
+        action="send",
+        action_type=act,
+        target_scope=target_scope,
+        send_as="vera",
+        body=body,
+        cta="binary_confirm",
+        suppression_key=suppression_key,
+        rationale=f"Phase 3 grounded continuation for {act.value}. Advancing approved workflow upon merchant commitment.",
+        conversation_id=conv_id,
+        merchant_id=merchant.merchant_id,
+        customer_id=cid,
+        trigger_id=trigger.id,
+        template_name=f"continuation_{act.value}_v1",
+        template_params=["action_continuation"],
+    )

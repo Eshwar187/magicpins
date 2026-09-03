@@ -39,6 +39,7 @@ def process_turn(
             previous_state=ConversationState.ENDED,
             new_state=ConversationState.ENDED,
             intent=IntentType.NEUTRAL,
+            route="TERMINAL_EXIT",
             action="end",
             rationale="Conversation is permanently closed. Stand down fail-closed.",
         )
@@ -61,6 +62,7 @@ def process_turn(
             previous_state=entity.state,
             new_state=entity.state,
             intent=IntentType.NEUTRAL,
+            route="STAND_DOWN",
             action="wait",
             wait_seconds=300,
             rationale="Empty message received. Standing by for message content.",
@@ -94,6 +96,7 @@ def process_turn(
                 previous_state=prev_state,
                 new_state=ConversationState.ENDED,
                 intent=intent,
+                route="TERMINAL_EXIT",
                 action="end",
                 rationale="Persistent merchant auto-reply detected (3 consecutive auto-replies). Gracefully closing conversation.",
             )
@@ -104,12 +107,13 @@ def process_turn(
             previous_state=entity.state,
             new_state=entity.state,
             intent=intent,
+            route="STAND_DOWN",
             action="wait",
             wait_seconds=14400,
             rationale="Detected merchant auto-reply (canned response). Backing off 4 hours to wait for owner.",
         )
 
-    # Genuine human message: reset the consecutive auto-reply tail counter!
+    # Genuine human message: reset the consecutive auto-reply tail counter
     entity.consecutive_auto_replies = 0
 
     # 5. Hostile / Opt-Out Handling (Terminal)
@@ -134,11 +138,13 @@ def process_turn(
             previous_state=prev_state,
             new_state=ConversationState.ENDED,
             intent=intent,
+            route="TERMINAL_EXIT",
             action="end",
             rationale="Merchant explicitly opted out. Closing conversation and suppressing conversation_id.",
         )
 
     # 6. Actionable Intent (WAITING -> ACTION)
+    # Phase 6 routes to CONTINUE_EXISTING_ACTION without inventing business prose
     if intent == IntentType.ACTIONABLE_INTENT:
         prev_state = entity.state
         entity.state = ConversationState.ACTION
@@ -160,45 +166,12 @@ def process_turn(
             previous_state=prev_state,
             new_state=ConversationState.ACTION,
             intent=intent,
+            route="CONTINUE_EXISTING_ACTION",
             action="send",
-            body=(
-                "Drafting now — sending you the complete preview shortly. "
-                "Here is the next step ready to confirm and launch. Confirm when ready to proceed!"
-            ),
-            cta="binary_confirm",
-            rationale="Switched to action mode upon merchant commitment. Honoring request directly.",
+            rationale="Switched to action mode upon merchant commitment. Routing to approved Phase 3 action continuation.",
         )
 
-    # 7. Clarification / Out-of-Scope (e.g. GST, taxes, loans)
-    if intent == IntentType.CLARIFICATION:
-        turn = ConversationTurn(
-            turn_number=turn_number,
-            from_role=from_role,
-            message=message,
-            received_at=received_at,
-            is_auto=False,
-            intent=intent,
-            action_taken="send",
-        )
-        entity.turns.append(turn)
-        entity.turn_count += 1
-        entity.last_action = "send"
-        entity.last_intent = intent
-        entity.last_updated_at = received_at
-        return TransitionResult(
-            previous_state=entity.state,
-            new_state=entity.state,
-            intent=intent,
-            action="send",
-            body=(
-                "I will have to leave tax and accounting to your CA — that is outside what I directly handle. "
-                "Coming back to our priority — sending the draft preview now. Ready to confirm?"
-            ),
-            cta="binary_yes_no",
-            rationale="Out-of-scope ask politely declined; redirected back to the core trigger without losing thread.",
-        )
-
-    # 8. Acknowledgement Handling (Prevent Acknowledgement Loop!)
+    # 7. Acknowledgement Handling (Prevent Acknowledgement Loop!)
     if intent == IntentType.ACKNOWLEDGEMENT:
         turn = ConversationTurn(
             turn_number=turn_number,
@@ -214,31 +187,31 @@ def process_turn(
         entity.last_intent = intent
         entity.last_updated_at = received_at
 
-        # If in WAITING: prevent acknowledgement loop by not re-pitching or sending proactive spam
+        # If in WAITING: prevent acknowledgement loop by standing by rather than spamming
         if entity.state == ConversationState.WAITING:
             entity.last_action = "wait"
             return TransitionResult(
                 previous_state=entity.state,
                 new_state=entity.state,
                 intent=intent,
+                route="STAND_DOWN",
                 action="wait",
                 wait_seconds=86400,
-                rationale="Acknowledged merchant receipt. Standing by for merchant instructions without repetitive outreach.",
+                rationale="Acknowledged merchant receipt. Standing by without sending repetitive outreach.",
             )
 
-        # If already in ACTION: confirm receipt and wait for confirmation
+        # If already in ACTION: continue actionable workflow
         entity.last_action = "send"
         return TransitionResult(
             previous_state=entity.state,
             new_state=entity.state,
             intent=intent,
+            route="CONTINUE_EXISTING_ACTION",
             action="send",
-            body="Got it! Sending the finalized preview over right away. Confirm when ready.",
-            cta="binary_confirm",
-            rationale="Acknowledged actionable confirmation.",
+            rationale="Acknowledged actionable confirmation. Routing to approved Phase 3 continuation.",
         )
 
-    # 9. General Neutral Active Response
+    # 8. General Neutral Response
     turn = ConversationTurn(
         turn_number=turn_number,
         from_role=from_role,
@@ -257,8 +230,7 @@ def process_turn(
         previous_state=entity.state,
         new_state=entity.state,
         intent=intent,
+        route="CONTINUE_EXISTING_ACTION",
         action="send",
-        body="Got it! Sending the updated details over right away. Here is the draft ready to confirm.",
-        cta="binary_confirm",
-        rationale="Acknowledged message and advanced actionable conversation.",
+        rationale="Acknowledged message and routing to active workflow.",
     )

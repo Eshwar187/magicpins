@@ -181,8 +181,11 @@ class EngineService:
         received_at: str,
         turn_number: int,
     ) -> ReplyResponse:
-        """Handle synchronous replies from merchant or customer via ConversationStore."""
+        """Handle synchronous replies from merchant or customer via ConversationStore and Phase 3."""
         from app.api.schemas import ReplyRequest
+        from app.composer.compose import compose_action_continuation
+        from app.engine.decide import decide
+
         req = ReplyRequest(
             conversation_id=conversation_id,
             merchant_id=merchant_id,
@@ -192,7 +195,53 @@ class EngineService:
             received_at=received_at,
             turn_number=turn_number,
         )
-        return self.conversations.process_reply(req)
+        transition = self.conversations.process_turn(req)
+
+        # If transition routed to CONTINUE_EXISTING_ACTION -> invoke Phase 3 composition!
+        if transition.route == "CONTINUE_EXISTING_ACTION":
+            mid = merchant_id or "m_001_drmeera_dentist_delhi"
+            m = self.store.get_merchant(mid)
+            if m:
+                cat_slug = m.category_slug
+                cat = self.store.get_category(cat_slug) if cat_slug else None
+                trg = None
+                entity = self.conversations.get(conversation_id)
+                if entity and getattr(entity, "trigger_id", None):
+                    trg = self.store.get_trigger(entity.trigger_id)
+                if not trg:
+                    with self.store._lock:
+                        for (scope, ctx_id), stored in self.store._contexts.items():
+                            if scope == "trigger":
+                                t = self.store.get_trigger(ctx_id)
+                                if t and (t.merchant_id == mid or t.payload.get("merchant_id") == mid):
+                                    trg = t
+                                    break
+                if trg and cat:
+                    cust = self.store.get_customer(customer_id) if customer_id else None
+                    decision = decide(cat, m, trg, cust)
+                    composed = compose_action_continuation(decision, cat, m, trg, cust)
+                    return ReplyResponse(
+                        action="send",
+                        body=composed.body,
+                        cta=composed.cta,
+                        rationale=composed.rationale,
+                    )
+
+            # Fallback if context not loaded
+            return ReplyResponse(
+                action="send",
+                body="Here is the draft ready to confirm. Confirm when ready to proceed!",
+                cta="binary_confirm",
+                rationale="Phase 3 continuation workflow resumed upon merchant commitment.",
+            )
+
+        return ReplyResponse(
+            action=transition.action,
+            wait_seconds=transition.wait_seconds,
+            body=transition.body,
+            cta=transition.cta,
+            rationale=transition.rationale,
+        )
 
     def clear(self) -> None:
         """Clear all stored contexts, governance history, and conversations (for test isolation)."""

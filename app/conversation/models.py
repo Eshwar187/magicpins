@@ -19,7 +19,6 @@ class IntentType(str, Enum):
     HOSTILE_OPT_OUT = "HOSTILE_OPT_OUT"
     ACTIONABLE_INTENT = "ACTIONABLE_INTENT"
     ACKNOWLEDGEMENT = "ACKNOWLEDGEMENT"
-    CLARIFICATION = "CLARIFICATION"
     NEUTRAL = "NEUTRAL"
 
 
@@ -40,6 +39,7 @@ class ConversationEntity(BaseModel):
     merchant_id: Optional[str] = None
     customer_id: Optional[str] = None
     target_scope: str = "merchant"
+    trigger_id: Optional[str] = None
     state: ConversationState = ConversationState.WAITING
     turn_count: int = 0
     consecutive_auto_replies: int = 0
@@ -50,10 +50,11 @@ class ConversationEntity(BaseModel):
 
 
 class TransitionResult(BaseModel):
-    """Result of state transition and bounded response generation."""
+    """Result of state transition and bounded response routing."""
     previous_state: ConversationState
     new_state: ConversationState
     intent: IntentType
+    route: str = "DEFAULT"  # "CONTINUE_EXISTING_ACTION", "STAND_DOWN", "TERMINAL_EXIT", "DEFAULT"
     action: str  # "send", "wait", "end"
     wait_seconds: Optional[int] = None
     body: Optional[str] = None

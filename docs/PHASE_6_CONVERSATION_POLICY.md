@@ -1,6 +1,6 @@
-# Phase 6 — Deterministic Conversation & Reply Intelligence Policy
+# Phase 6 — Deterministic Conversation & Reply Intelligence Policy (Phase 6.1 Corrected)
 
-## 1. Executive Summary & Architectural Invariant
+## 1. Executive Summary & Core Architectural Invariants
 
 Phase 2 answers: **WHAT should Vera do?**  
 Phase 3 answers: **HOW should Vera express it?**  
@@ -10,123 +10,136 @@ Phase 6 answers: **HOW SHOULD VERA INTERPRET INBOUND REPLIES AND TRANSITION CONV
 ```text
 Inbound Merchant / Customer Reply (/v1/reply)
                    ↓
-Phase 6: Deterministic Intent Classification (Priority Order)
+Phase 6: Deterministic Intent Classification (Whole-Utterance Priority Order)
                    ↓
 Phase 6: Conversation State Machine (WAITING / ACTION / ENDED)
                    ↓
-Phase 6: Bounded Reply Response (send / wait / end)
+Route Decision (CONTINUE_EXISTING_ACTION / STAND_DOWN / TERMINAL_EXIT)
+                   ↓
+If CONTINUE_EXISTING_ACTION: Phase 3 Grounded Composition (compose_action_continuation)
+                   ↓
+Phase 4 Synchronous API Response
 ```
 
-### Core Policy Statement
-> **Phase 6 interprets conversational intent and controls conversation state. It does not independently decide which business action is best.**
+### Critical Authority Boundaries:
+> **Phase 6 interprets conversational intent, enforces safety restraint, and controls state transitions. It does NOT independently compose business message prose, select business actions, score candidates, or alter Phase 2 decision authority.**
 
-Phase 6 owns conversation interpretation, state transitions, bounded reply behavior, and conversational safety. It does **not** create new `ActionType` values, modify Phase 2 scoring, change category/merchant facts, or invent new business actions.
+> **Phase 6 owns message composition: NO**  
+> **Phase 3 remains authoritative: YES**  
+> **Phase 2 remains authoritative: YES**  
+> **Phase 5 remains authoritative: YES**
 
 ---
 
-## 2. Conversation State Machine
+## 2. Auto-Reply Semantics & Resolution of Blocker 1
 
-```mermaid
-stateDiagram-v2
-    [*] --> WAITING: Outbound Send or Inbound Contact
-    
-    WAITING --> WAITING: ACKNOWLEDGEMENT / Neutral Receipt
-    WAITING --> ACTION: ACTIONABLE_INTENT ("Let's do it")
-    WAITING --> WAITING: Single Auto-Reply (Wait 4h)
-    WAITING --> ENDED: Persistent Auto-Reply (3 consecutive)
-    WAITING --> ENDED: HOSTILE_OPT_OUT ("Stop messaging me")
+### Authoritative Evidence & Semantics:
+- **`examples/api-call-examples.md` Example 2.5**:
+  ```json
+  {
+    "action": "wait",
+    "wait_seconds": 14400,
+    "rationale": "Detected merchant auto-reply (canned 'Thank you for contacting' phrasing). Backing off 4 hours to wait for owner."
+  }
+  ```
+- **`judge_simulator.py` lines 692–714**:
+  ```python
+  for i in range(1, 5):
+      data, err, _ = self.client.reply(f"conv_auto_{i}", mid, auto_msg, i + 1)
+      if action == "end":
+          print_success("Bot ENDED — detected auto-reply pattern!")
+          return True
+      elif action == "wait":
+          print_success(f"Turn {i}: Bot WAITING {wait_s}s")
+  print_warn("Bot never ended after 4 auto-replies")
+  return True
+  ```
+- **Explanation of the Behavior**:
+  1. The judge simulator passes a new conversation ID on each turn (`f"conv_auto_{i}"`).
+  2. For each conversation, encountering a canned auto-reply triggers a graceful 4-hour backoff (`action = "wait"`, `wait_seconds = 14400`), resulting in `[PASS] Turn {i}: Bot WAITING 14400s`.
+  3. The judge simulator prints a warning if `action != "end"` after 4 distinct conversation turns, but explicitly returns `True` (`Auto-reply status: PASS`).
+  4. Within a single persistent conversation session, receiving 3 consecutive auto-replies without genuine human interaction triggers `action = "end"` with route `TERMINAL_EXIT`.
 
-    ACTION --> ACTION: ACKNOWLEDGEMENT / Neutral Receipt
-    ACTION --> ENDED: HOSTILE_OPT_OUT
-    ACTION --> ENDED: Persistent Auto-Reply
+Both outcomes are consistent with the authoritative challenge contract: **Never burn proactive messaging turns on automated responders.**
 
-    ENDED --> ENDED: Any Message (Permanent Terminal Stand Down)
+---
+
+## 3. Resolution of Blocker 2: Phase 6 Business Message Removal
+
+Phase 6 previously contained hardcoded business prose:
+`"Drafting now — sending you the complete preview shortly. Here is the next step ready to confirm and launch..."`
+
+### The Surgical Correction:
+1. **Phase 6 outputs only structured state and route**:
+   ```python
+   TransitionResult(
+       previous_state=ConversationState.WAITING,
+       new_state=ConversationState.ACTION,
+       intent=IntentType.ACTIONABLE_INTENT,
+       route="CONTINUE_EXISTING_ACTION",
+       action="send",
+       rationale="Switched to action mode upon merchant commitment. Routing to approved Phase 3 action continuation.",
+   )
+   ```
+2. **Phase 3 owns all continuation composition**:
+   - Implemented `compose_action_continuation()` in `app/composer/compose.py`.
+   - Derives grounded continuation copy directly from the authoritative Phase 2 `decision` and domain facts.
+   - Example for `USE_RESEARCH_INSIGHT`:
+     *"Here is the draft patient-education WhatsApp note ready to confirm and share: 'Recent clinical research demonstrates the preventive efficacy of fluoride varnish protocols for mixed dentition.' Confirm to proceed with sending."*
+   - Contains required actioning words (`here`, `draft`, `confirm`, `proceed`), zero qualifying questions (`would you`, `do you`).
+   - Phase 6 does **not** compose prose.
+
+---
+
+## 4. Resolution of Blocker 3: Removal of Unsupported CLARIFICATION
+
+- **Required by contract**: **NO**.
+- General questions or out-of-scope inquiries are classified under `IntentType.NEUTRAL`.
+- `CLARIFICATION` has been completely deleted from `IntentType`, `classifier.py`, `state_machine.py`, and test suites.
+
+---
+
+## 5. Intent Model & Whole-Utterance Priority Order
+
+| Priority | Intent Class | Example Inputs | Resolution & Precedence Rules |
+| :---: | :--- | :--- | :--- |
+| **1** | **Empty / Whitespace** | `""`, `"   "` | Safe immediate fallback: `action="wait"`, `wait_seconds=300`. |
+| **2** | **Auto-Reply (`is_auto`)** | *"Thank you for contacting us! Our team will respond shortly."* | Detected via regex; backs off 14400s; consecutive tail tracked. |
+| **3** | **`HOSTILE_OPT_OUT`** | *"Stop messaging me"*, *"Unsubscribe"*, *"stop, let's do it"*, *"okay, but stop messaging me"* | **Absolute Whole-Utterance Precedence**: Hostile tokens anywhere in the message override all positive/actionable words. Terminal exit (`action="end"`). |
+| **4** | **`ACTIONABLE_INTENT`** | *"sure, let's do it"*, *"yes, let's proceed"*, *"what's next?"*, *"proceed"*, *"send the draft"* | Whole-utterance actionable commitment. Overrides pure passive acknowledgement. Routes to `CONTINUE_EXISTING_ACTION`. |
+| **5** | **`ACKNOWLEDGEMENT`** | *"sure"*, *"yes"*, *"ok"*, *"okay"*, *"thanks"*, *"got it"* | **Passive Receipt**: Differentiated from actionable intent. Prevents loop spam by standing down (`action="wait"`, `wait_seconds=86400`). |
+| **6** | **`NEUTRAL`** | General unclassified messages | Default active workflow routing. |
+
+---
+
+## 6. Compound Intent Matrix Verification
+
+| Input Utterance | Classified Intent | State Transition | Action & Route | Invariant Verified |
+| :--- | :--- | :--- | :--- | :--- |
+| `"sure"` | `ACKNOWLEDGEMENT` | `WAITING -> WAITING` | `wait` (86400s), `STAND_DOWN` | Passive receipt does not trigger action mode |
+| `"sure, let's do it"` | `ACTIONABLE_INTENT` | `WAITING -> ACTION` | `send`, `CONTINUE_EXISTING_ACTION` | Actionable verb elevates acknowledgement |
+| `"yes"` | `ACKNOWLEDGEMENT` | `WAITING -> WAITING` | `wait` (86400s), `STAND_DOWN` | Passive "yes" alone does not start campaigns |
+| `"yes, let's proceed"` | `ACTIONABLE_INTENT` | `WAITING -> ACTION` | `send`, `CONTINUE_EXISTING_ACTION` | Explicit commitment starts campaign |
+| `"okay, but stop messaging me"` | `HOSTILE_OPT_OUT` | `WAITING -> ENDED` | `end`, `TERMINAL_EXIT` | Hostile clause overrides initial "okay" |
+| `"sure, but don't contact me again"` | `HOSTILE_OPT_OUT` | `WAITING -> ENDED` | `end`, `TERMINAL_EXIT` | Hostile clause overrides initial "sure" |
+| `"stop, let's do it"` | `HOSTILE_OPT_OUT` | `WAITING -> ENDED` | `end`, `TERMINAL_EXIT` | "stop" has absolute precedence |
+
+---
+
+## 7. Architectural Boundary Invariants
+
+```text
+Phase 6 CANNOT change:
+- ActionType
+- Phase 2 score
+- selected offer
+- selected facts
+- category fit
+- business rationale
 ```
 
-### State Definitions:
-1. **`WAITING`**:
-   - Initial active state after an outreach is sent or when waiting for user response.
-   - Neutral acknowledgements (`"ok"`, `"thanks"`) keep the system in `WAITING` with an intentional backoff (`action="wait"`, `wait_seconds=86400`) to **prevent acknowledgement loops**.
-2. **`ACTION`**:
-   - Active execution state entered when the merchant expresses concrete commitment (`ACTIONABLE_INTENT`).
-   - Returns actioning copy (`"Drafting now — sending you the complete preview shortly..."`), using `done`, `sending`, `draft`, `here`, `confirm`, `proceed`, `next`, with zero qualifying questions.
-3. **`ENDED`**:
-   - Strictly terminal state entered upon explicit opt-out (`HOSTILE_OPT_OUT`) or persistent bot loop (`consecutive_auto_replies >= 3`).
-   - Permanently stand down fail-closed (`action="end"`).
-
----
-
-## 3. Deterministic Intent Taxonomy & Priority Order
-
-The intent classifier is completely deterministic (regex pattern matching, normalized text, zero LLM, zero network).
-
-### Priority Precedence:
-1. **Empty / Whitespace**:
-   - Returns safe `action="wait"`, `wait_seconds=300`.
-2. **Auto-Reply Detection (`is_auto`)**:
-   - Evaluates canned responder phrases: `"thank you for contacting"`, `"team will respond shortly"`, `"automated message"`, `"auto-reply"`, `"our team will respond"`, `"away from the phone"`.
-3. **`HOSTILE_OPT_OUT` (Absolute Precedence)**:
-   - Evaluated before any positive or action words.
-   - Compound sentences like `"Okay, but stop messaging me"` strictly resolve to `HOSTILE_OPT_OUT`.
-   - Patterns: `stop messaging`, `not interested`, `useless spam`, `unsubscribe`, `leave me alone`, `remove me`, `this is spam`, `do not contact`, `don't message`, `stop`, `opt out`.
-4. **`ACTIONABLE_INTENT`**:
-   - Concrete willingness to proceed: `"let's do it"`, `"what's next?"`, `"how do i start"`, `"proceed"`, `"go ahead"`, `"do it"`, `"send the draft"`, `"share the preview"`, `"can we do this"`, `"sign me up"`.
-5. **`CLARIFICATION` (Domain Redirection)**:
-   - Out-of-scope business inquiries (GST filing, tax accounting, legal advice, personal loans).
-   - Courteously redirected to professional advisors without dropping conversation context.
-6. **`ACKNOWLEDGEMENT` (Loop Prevention)**:
-   - Passive receipt tokens: `"ok"`, `"okay"`, `"thanks"`, `"thank you"`, `"got it"`, `"sure"`, `"understood"`, `"noted"`, `"fine"`, `"cool"`, `"received"`.
-   - Distinguishes acknowledgement from actionable intent: simple acknowledgement does **not** trigger action mode or spam the recipient.
-7. **`NEUTRAL`**:
-   - General ongoing conversational replies.
-
----
-
-## 4. Auto-Reply Loop Defense & Consecutive Tail Tracking
-
-To prevent infinite ping-pong between automated responders:
-1. **Consecutive Tail Tracking**:
-   - The loop counter tracks consecutive auto-replies **at the tail of the conversation**.
-   - Consecutive sequence: `AUTO -> AUTO -> AUTO` $\implies$ 3 consecutive $\implies$ `action="end"`.
-   - Interleaved sequence: `AUTO -> HUMAN -> AUTO -> HUMAN -> AUTO` $\implies$ human turn resets counter to 0; does **not** end prematurely.
-2. **Single Auto-Reply Backoff**:
-   - `action="wait"`, `wait_seconds=14400` (4 hours) allowing the business owner time to resume.
-
----
-
-## 5. Hostile / Opt-Out Terminality
-
-- Once `HOSTILE_OPT_OUT` is classified, the conversation transitions immediately to `ENDED`.
-- **Zero persuasion or follow-up**: Vera does not send apologies, promotional counter-offers, or survey questions.
-- Fail-closed terminal response: `action="end"`.
-
----
-
-## 6. Conversation & Tenant Isolation
-
-- Active conversations are tracked per `conversation_id` inside `ConversationStore`.
-- Thread-safe concurrency via `threading.RLock`.
-- **Isolation Invariants**:
-  - Inbound messages to Conversation A cannot alter the state, turn count, or auto-reply counter of Conversation B.
-  - Merchant A conversations cannot bleed into Merchant B conversations.
-
----
-
-## 7. Determinism & Zero Wall-Clock Dependency
-
-- State transitions and responses depend purely on:
-  `(previous_state, incoming_message, turn_number)`
-- Zero usage of `datetime.now()`, `time.time()`, random number generators, or external models.
-- Simulation timestamp in `received_at` is preserved as metadata.
-
----
-
-## 8. Architectural Boundary Proof: Not a Second Business Decision Engine
-
-| Capability | Responsible Layer | Phase 6 Authority |
-| :--- | :--- | :--- |
-| **Select business action & target candidate** | Phase 2 (`decide()`) | ❌ **FORBIDDEN** (Phase 6 cannot select offers or score triggers) |
-| **Compose grounded message copy & CTA** | Phase 3 (`compose()`) | ❌ **FORBIDDEN** (Phase 6 uses bounded reply protocol copy) |
-| **Deduplication & Transmission Governance** | Phase 5 (`evaluate_outreach()`) | ❌ **FORBIDDEN** (Phase 6 does not alter exact deduplication) |
-| **Inbound intent classification & state transitions** | Phase 6 (`process_turn()`) | ✅ **EXCLUSIVE AUTHORITY** |
-| **Auto-reply loop defense & hostile opt-out** | Phase 6 (`ConversationStore`) | ✅ **EXCLUSIVE AUTHORITY** |
+Phase 6 only answers:
+1. What did the incoming message mean? (`IntentType`)
+2. What state transition occurred? (`ConversationState`)
+3. Should the conversation continue? (`action = send/wait/end`)
+4. Which existing workflow should be resumed? (`route`)

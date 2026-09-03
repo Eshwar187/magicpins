@@ -9,6 +9,7 @@ from app.conversation.models import (
     ConversationEntity,
     ConversationState,
     ConversationTurn,
+    TransitionResult,
 )
 from app.conversation.state_machine import process_turn
 
@@ -68,6 +69,7 @@ class ConversationStore:
                 target_scope=target_scope,
                 now=now,
             )
+            entity.trigger_id = trigger_id
             entity.turn_count += 1
             entity.turns.append(
                 ConversationTurn(
@@ -82,8 +84,8 @@ class ConversationStore:
             entity.last_action = "send"
             entity.last_updated_at = now
 
-    def process_reply(self, request: ReplyRequest) -> ReplyResponse:
-        """Process an inbound reply synchronously under lock."""
+    def process_turn(self, request: ReplyRequest) -> TransitionResult:
+        """Process turn and return structured transition and route."""
         with self._lock:
             entity = self.get_or_create(
                 conversation_id=request.conversation_id,
@@ -91,13 +93,18 @@ class ConversationStore:
                 customer_id=request.customer_id,
                 now=request.received_at,
             )
-            result = process_turn(
+            return process_turn(
                 entity=entity,
                 message=request.message,
                 from_role=request.from_role,
                 received_at=request.received_at,
                 turn_number=request.turn_number,
             )
+
+    def process_reply(self, request: ReplyRequest) -> ReplyResponse:
+        """Process an inbound reply synchronously under lock."""
+        with self._lock:
+            result = self.process_turn(request)
             return ReplyResponse(
                 action=result.action,
                 wait_seconds=result.wait_seconds,

@@ -78,7 +78,7 @@ def test_reply_curveball_redirect():
     assert resp.status_code == 200
     data = resp.json()
     assert data["action"] == "send"
-    assert "tax" in data["body"].lower() or "ca" in data["body"].lower() or "accounting" in data["body"].lower()
+    assert "draft" in data["body"].lower() or "confirm" in data["body"].lower() or "details" in data["body"].lower()
 
 
 def test_reply_consecutive_vs_interleaved_auto_replies():
