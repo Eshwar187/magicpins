@@ -28,7 +28,6 @@ HOSTILE_PATTERNS = [
     re.compile(r"\bnot\s+interested\b", re.IGNORECASE),
     re.compile(r"\bleave\s+me\s+alone\b", re.IGNORECASE),
     re.compile(r"\bopt[- ]?out\b", re.IGNORECASE),
-    re.compile(r"^\s*stop\b", re.IGNORECASE),
     re.compile(r"\bstop\b", re.IGNORECASE),
 ]
 

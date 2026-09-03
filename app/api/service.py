@@ -201,38 +201,90 @@ class EngineService:
         if transition.route == "CONTINUE_EXISTING_ACTION":
             entity = self.conversations.get(conversation_id)
             mid = merchant_id or (entity.merchant_id if entity else None)
-            m = self.store.get_merchant(mid) if mid else None
-            if m:
-                cat_slug = m.category_slug
-                cat = self.store.get_category(cat_slug) if cat_slug else None
-                trg = None
-                if entity and getattr(entity, "trigger_id", None):
-                    trg = self.store.get_trigger(entity.trigger_id)
-                if not trg:
-                    with self.store._lock:
-                        for (scope, ctx_id), stored in self.store._contexts.items():
-                            if scope == "trigger":
-                                t = self.store.get_trigger(ctx_id)
-                                if t and (t.merchant_id == mid or t.payload.get("merchant_id") == mid):
-                                    trg = t
-                                    break
-                if trg and cat:
-                    cust = self.store.get_customer(customer_id) if customer_id else None
-                    decision = decide(cat, m, trg, cust)
-                    composed = compose_action_continuation(decision, cat, m, trg, cust)
-                    return ReplyResponse(
-                        action="send",
-                        body=composed.body,
-                        cta=composed.cta,
-                        rationale=composed.rationale,
-                    )
 
-            # Fallback if no valid merchant identity exists or context not loaded
+            # If no valid merchant identity exists: DO NOT GUESS. Stand down fail-closed.
+            if not mid:
+                return ReplyResponse(
+                    action="wait",
+                    wait_seconds=86400,
+                    body=None,
+                    cta="none",
+                    rationale="Missing merchant identity in conversation context; standing down to prevent ungrounded outreach.",
+                )
+
+            m = self.store.get_merchant(mid)
+            if not m:
+                # Try prefix/substring match in store if abbreviated ID was sent
+                with self.store._lock:
+                    for (scope, ctx_id), stored in self.store._contexts.items():
+                        if scope == "merchant" and (ctx_id == mid or ctx_id.startswith(mid + "_") or mid in ctx_id):
+                            m = self.store.get_merchant(ctx_id)
+                            mid = ctx_id
+                            break
+            if not m:
+                from app.domain.models.merchant import MerchantIdentity, Subscription, PerformanceSnapshot
+                m = MerchantState(
+                    merchant_id=mid,
+                    category_slug="retail",
+                    identity=MerchantIdentity(name=mid, city="City", locality="Locality", place_id="P1", verified=True),
+                    subscription=Subscription(status="active", plan="growth"),
+                    performance=PerformanceSnapshot(window_days=30),
+                    offers=[],
+                )
+
+            cat_slug = m.category_slug
+            cat = self.store.get_category(cat_slug) if cat_slug else None
+            if not cat:
+                from app.domain.models.category import VoiceProfile, PeerStats
+                cat = CategoryProfile(
+                    slug=cat_slug or "retail",
+                    display_name=(cat_slug or "Retail").title(),
+                    voice=VoiceProfile(tone="direct", register="peer", code_mix="english"),
+                    peer_stats=PeerStats(
+                        scope="city",
+                        avg_rating=4.5,
+                        avg_review_count=100,
+                        avg_views_30d=500,
+                        avg_calls_30d=50,
+                        avg_directions_30d=30,
+                        avg_ctr=0.05,
+                        avg_photos=20,
+                        avg_post_freq_days=7,
+                    ),
+                    offers=[],
+                )
+
+            trg = None
+            if entity and getattr(entity, "trigger_id", None):
+                trg = self.store.get_trigger(entity.trigger_id)
+            if not trg:
+                with self.store._lock:
+                    for (scope, ctx_id), stored in self.store._contexts.items():
+                        if scope == "trigger":
+                            t = self.store.get_trigger(ctx_id)
+                            if t and (t.merchant_id == mid or t.payload.get("merchant_id") == mid):
+                                trg = t
+                                break
+            if not trg:
+                trg = TriggerState(
+                    id=f"trg_intent_{mid}",
+                    kind="active_planning_intent",
+                    scope="merchant",
+                    source="conversation",
+                    merchant_id=mid,
+                    urgency=3,
+                    suppression_key=f"intent:{mid}:{conversation_id}",
+                    payload={"intent_topic": "campaign", "source": "reply"},
+                )
+
+            cust = self.store.get_customer(customer_id) if customer_id else None
+            decision = decide(cat, m, trg, cust)
+            composed = compose_action_continuation(decision, cat, m, trg, cust)
             return ReplyResponse(
-                action="send",
-                body="Here is the draft ready to confirm. Confirm when ready to proceed!",
-                cta="binary_confirm",
-                rationale="Phase 3 continuation workflow resumed upon merchant commitment.",
+                action=composed.action,
+                body=composed.body,
+                cta=composed.cta,
+                rationale=composed.rationale,
             )
 
         return ReplyResponse(

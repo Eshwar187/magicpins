@@ -64,7 +64,7 @@ def test_f1_known_conversation_entity_merchant():
 
 
 def test_f1_no_merchant_identity_does_not_guess():
-    """Verify that when merchant_id is omitted and conversation has no merchant, engine does NOT guess."""
+    """Verify that when merchant_id is omitted and conversation has no merchant, engine does NOT guess and stands down."""
     svc = EngineService()
     # Context contains multiple merchants
     svc.store.store("merchant", "m_001_drmeera_dentist_delhi", 1, {"merchant_id": "m_001_drmeera_dentist_delhi", "category_slug": "dentists"})
@@ -81,12 +81,14 @@ def test_f1_no_merchant_identity_does_not_guess():
         turn_number=2,
     )
 
-    assert resp.action == "send"
-    assert resp.cta == "binary_confirm"
-    # Must use identity-free fallback continuation rather than assuming Dr. Meera
-    assert "patient-education" not in resp.body.lower()
-    assert "dentist" not in resp.body.lower()
-    assert resp.body == "Here is the draft ready to confirm. Confirm when ready to proceed!"
+    # 1. Must stand down safely rather than inventing business prose
+    assert resp.action == "wait"
+    assert resp.wait_seconds == 86400
+    assert resp.body is None
+    assert resp.cta == "none"
+    assert "Missing merchant identity" in resp.rationale
+    entity = svc.conversations.get("conv_f1_unknown")
+    assert entity.merchant_id is None
 
 
 def test_f1_multiple_merchants_no_arbitrary_selection():
@@ -104,10 +106,20 @@ def test_f1_multiple_merchants_no_arbitrary_selection():
         received_at="2026-04-26T10:05:00Z",
         turn_number=2,
     )
-    # Output must be identity-free fallback
-    assert resp.body == "Here is the draft ready to confirm. Confirm when ready to proceed!"
+    # Output must be fail-closed stand-down, never selecting m_batch_0 or any other merchant
+    assert resp.action == "wait"
+    assert resp.body is None
+    assert resp.cta == "none"
     entity = svc.conversations.get("conv_multi_no_guess")
     assert entity.merchant_id is None
+
+
+def test_no_direct_service_layer_business_prose():
+    """Verify app/api/service.py does not contain hardcoded business message strings."""
+    from pathlib import Path
+    service_code = Path(r"c:\Users\eshwar\Desktop\maginpins\app\api\service.py").read_text(encoding="utf-8")
+    assert "Here is the draft ready to confirm" not in service_code
+    assert "Confirm when ready to proceed" not in service_code
 
 
 # =============================================================================

@@ -32,7 +32,7 @@ def test_conversation_isolation():
         "turn_number": 1,
     }).json()
     assert r_b["action"] == "send"
-    assert "draft" in r_b["body"].lower() or "sending" in r_b["body"].lower()
+    assert any(w in r_b["body"].lower() for w in ["draft", "sending", "confirm", "proceed", "proposal"])
 
     # Conversation C for different merchant with same turn message remains waiting
     r_c = client.post("/v1/reply", json={

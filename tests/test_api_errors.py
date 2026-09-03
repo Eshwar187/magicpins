@@ -27,7 +27,7 @@ def test_prompt_injection_safety():
     })
     assert resp.status_code == 200
     data = resp.json()
-    assert "password" not in data.get("body", "").lower()
+    assert "password" not in (data.get("body") or "").lower()
     assert data["action"] in ("send", "wait", "end")
 
 
