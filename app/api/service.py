@@ -15,21 +15,21 @@ from app.domain.models.trigger import TriggerState
 from app.engine.actions import ActionType
 from app.engine.decide import decide
 from app.composer.compose import compose
+from app.conversation import ConversationStore
 from app.governance import OutreachDisposition, OutreachStore
 from app.api.schemas import ActionItem, ContextCounts, HealthzResponse, MetadataResponse, ReplyResponse, TickResponse
 
 
 class EngineService:
-    """Singleton service managing context storage, tick dispatch, and reply handling."""
+    """Thread-safe singleton engine service coordinating storage, decisioning, composition, and governance."""
 
     def __init__(self, store: Optional[ContextStore] = None) -> None:
+        self._lock = threading.RLock()
         self.store = store or ContextStore()
         self.governance = OutreachStore()
+        self.conversations = ConversationStore()
         self.start_time = time.monotonic()
-        self._lock = threading.RLock()
         self.metadata = MetadataResponse()
-        # In-memory tracking for active conversations
-        self._conversations: Dict[str, List[Dict[str, Any]]] = {}
 
     def get_health(self) -> HealthzResponse:
         """Lightweight live health check returning uptime and loaded context counts."""
@@ -158,11 +158,16 @@ class EngineService:
                 actions.append(action_item)
 
                 # Record conversation
-                self._conversations.setdefault(msg.conversation_id, []).append({
-                    "from": msg.send_as,
-                    "body": msg.body,
-                    "trigger_id": msg.trigger_id,
-                })
+                self.conversations.record_tick_send(
+                    conversation_id=msg.conversation_id,
+                    merchant_id=msg.merchant_id,
+                    customer_id=msg.customer_id,
+                    target_scope=msg.target_scope,
+                    trigger_id=msg.trigger_id,
+                    send_as=msg.send_as,
+                    body=msg.body,
+                    now=now,
+                )
 
         return TickResponse(actions=actions)
 
@@ -176,128 +181,23 @@ class EngineService:
         received_at: str,
         turn_number: int,
     ) -> ReplyResponse:
-        """Handle synchronous replies from merchant or customer in active conversation."""
-        msg_lower = message.lower().strip()
-
-        if not msg_lower:
-            return ReplyResponse(
-                action="wait",
-                wait_seconds=300,
-                rationale="Empty message received. Standing by for message content.",
-            )
-
-        # 1. Detect canned auto-replies (e.g. WhatsApp Business auto-greeting)
-        auto_reply_patterns = [
-            "thank you for contacting",
-            "team will respond shortly",
-            "automated message",
-            "auto-reply",
-            "our team will respond",
-            "away from the phone",
-        ]
-        is_auto = any(pat in msg_lower for pat in auto_reply_patterns)
-
-        with self._lock:
-            if conversation_id not in self._conversations:
-                self._conversations[conversation_id] = []
-            self._conversations[conversation_id].append({
-                "turn_number": turn_number,
-                "from_role": from_role,
-                "message": message,
-                "received_at": received_at,
-                "is_auto": is_auto,
-            })
-            history = self._conversations[conversation_id]
-
-            # Count consecutive auto-replies ending at current turn
-            consecutive_auto = 0
-            if is_auto:
-                for turn in reversed(history):
-                    if turn.get("is_auto"):
-                        consecutive_auto += 1
-                    else:
-                        break
-
-        if is_auto:
-            if consecutive_auto >= 3:
-                return ReplyResponse(
-                    action="end",
-                    rationale="Persistent merchant auto-reply detected (3 consecutive auto-replies). Gracefully closing conversation.",
-                )
-            return ReplyResponse(
-                action="wait",
-                wait_seconds=14400,
-                rationale="Detected merchant auto-reply (canned response). Backing off 4 hours to wait for owner.",
-            )
-
-        # 2. Detect explicit opt-out or hostility
-        optout_patterns = [
-            "stop messaging",
-            "not interested",
-            "useless spam",
-            "unsubscribe",
-            "stop",
-            "don't message",
-            "dont message",
-            "do not contact",
-        ]
-        if any(pat in msg_lower for pat in optout_patterns):
-            return ReplyResponse(
-                action="end",
-                rationale="Merchant explicitly opted out. Closing conversation and suppressing conversation_id.",
-            )
-
-        # 3. Detect intent commitment ("Ok lets do it", "Whats next", "send the abstract", etc.)
-        # Important: must use actioning words ('draft', 'sending', 'here', 'confirm', 'next', 'done')
-        # and avoid qualifying questions ('would you', 'do you', 'can you tell', 'what if', 'how about')
-        commitment_patterns = [
-            "lets do it",
-            "let's do it",
-            "whats next",
-            "what's next",
-            "yes",
-            "ok",
-            "proceed",
-            "send",
-            "draft",
-            "share",
-            "go ahead",
-        ]
-        if any(pat in msg_lower for pat in commitment_patterns):
-            return ReplyResponse(
-                action="send",
-                body=(
-                    "Drafting now — sending you the complete preview shortly. "
-                    "Here is the next step ready to confirm and launch. Confirm when ready to proceed!"
-                ),
-                cta="binary_confirm",
-                rationale="Switched to action mode upon merchant commitment. Honoring request directly.",
-            )
-
-        # 4. Out-of-scope / Curveball ask (e.g. GST filing, personal loans)
-        out_of_scope_patterns = ["gst", "tax", "filing", "accounting", "loan", "legal"]
-        if any(pat in msg_lower for pat in out_of_scope_patterns):
-            return ReplyResponse(
-                action="send",
-                body=(
-                    "I will have to leave tax and accounting to your CA — that is outside what I directly handle. "
-                    "Coming back to our priority — sending the draft preview now. Ready to confirm?"
-                ),
-                cta="binary_yes_no",
-                rationale="Out-of-scope ask politely declined; redirected back to the core trigger without losing thread.",
-            )
-
-        # 5. General active conversational response
-        return ReplyResponse(
-            action="send",
-            body="Got it! Sending the updated details over right away. Here is the draft ready to confirm.",
-            cta="binary_confirm",
-            rationale="Acknowledged message and advanced actionable conversation.",
+        """Handle synchronous replies from merchant or customer via ConversationStore."""
+        from app.api.schemas import ReplyRequest
+        req = ReplyRequest(
+            conversation_id=conversation_id,
+            merchant_id=merchant_id,
+            customer_id=customer_id,
+            from_role=from_role,
+            message=message,
+            received_at=received_at,
+            turn_number=turn_number,
         )
+        return self.conversations.process_reply(req)
 
     def clear(self) -> None:
         """Clear all stored contexts, governance history, and conversations (for test isolation)."""
         with self._lock:
             self.store.clear()
             self.governance.clear()
-            self._conversations.clear()
+            self.conversations.clear()
+

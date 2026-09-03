@@ -103,6 +103,9 @@ class ReplyBody(BaseModel):
     turn_number: int = 2
 
 
+ReplyRequest = ReplyBody
+
+
 class ReplyResponse(BaseModel):
     action: Literal["send", "wait", "end"]
     body: Optional[str] = None
