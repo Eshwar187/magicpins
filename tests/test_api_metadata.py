@@ -15,7 +15,6 @@ def test_metadata_get():
     assert "model" in data
     assert "approach" in data
     assert "version" in data
-    assert "submitted_at" in data
 
     # Verify no secrets or PII leaked
     forbidden_keys = ["api_key", "secret", "password", "token", "env"]

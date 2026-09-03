@@ -30,9 +30,7 @@ class MetadataResponse(BaseModel):
     team_members: List[str] = ["Eshwar"]
     model: str = "deterministic-engine-v1"
     approach: str = "grounded deterministic decision engine + category-aware templating"
-    contact_email: str = "eshwar@example.com"
     version: str = "1.0.0"
-    submitted_at: str = "2026-04-26T08:00:00Z"
 
 
 # -----------------------------------------------------------------------------
