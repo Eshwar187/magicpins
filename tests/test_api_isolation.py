@@ -93,7 +93,8 @@ def test_interleaved_context_updates_do_not_contaminate():
     client.post("/v1/context", json={"scope": "merchant", "context_id": m_a["merchant_id"], "version": 1, "payload": m_a})
     client.post("/v1/context", json={"scope": "merchant", "context_id": m_a["merchant_id"], "version": 2, "payload": m_a})
 
-    # Response for B should be bit-for-bit identical
+    # Response for B should be bit-for-bit identical (clearing governance history to test context isolation)
+    get_service().governance.clear()
     resp_b2 = client.post("/v1/tick", json={"now": "2026-04-26T10:00:00Z", "available_triggers": ["trg_b"]})
     body_b2 = resp_b2.json()["actions"][0]["body"]
     assert body_b1 == body_b2

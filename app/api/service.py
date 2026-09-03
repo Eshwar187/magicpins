@@ -15,6 +15,7 @@ from app.domain.models.trigger import TriggerState
 from app.engine.actions import ActionType
 from app.engine.decide import decide
 from app.composer.compose import compose
+from app.governance import OutreachDisposition, OutreachStore
 from app.api.schemas import ActionItem, ContextCounts, HealthzResponse, MetadataResponse, ReplyResponse, TickResponse
 
 
@@ -23,6 +24,7 @@ class EngineService:
 
     def __init__(self, store: Optional[ContextStore] = None) -> None:
         self.store = store or ContextStore()
+        self.governance = OutreachStore()
         self.start_time = time.monotonic()
         self._lock = threading.RLock()
         self.metadata = MetadataResponse()
@@ -122,12 +124,23 @@ class EngineService:
                 # Execute Phase 2 Decision Engine
                 decision = decide(cat, m, trg, cust)
 
-                # Restraint: If decision is WAIT or END, do not spam outbound message
-                if decision.action_type in (ActionType.WAIT, ActionType.END):
-                    continue
-
                 # Execute Phase 3 Message Composer
                 msg = compose(decision, cat, m, trg, cust)
+
+                # Execute Phase 5 Outreach Governance Barrier (Atomic check-and-record)
+                outreach = self.governance.evaluate_and_record(
+                    decision=decision,
+                    composed=msg,
+                    now=now,
+                    category=cat,
+                    merchant=m,
+                    trigger=trg,
+                    customer=cust,
+                )
+
+                # Only transmit if OutreachPolicy == SEND
+                if outreach.disposition != OutreachDisposition.SEND:
+                    continue
 
                 action_item = ActionItem(
                     conversation_id=msg.conversation_id,
@@ -283,7 +296,8 @@ class EngineService:
         )
 
     def clear(self) -> None:
-        """Clear all stored contexts and conversations (for test isolation)."""
+        """Clear all stored contexts, governance history, and conversations (for test isolation)."""
         with self._lock:
             self.store.clear()
+            self.governance.clear()
             self._conversations.clear()

@@ -32,10 +32,22 @@ def test_100_runs_api_determinism():
     # Reference run
     base_resp = client.post("/v1/tick", json={"now": "2026-04-26T10:35:00Z", "available_triggers": [trg_data["id"]]})
     base_json = base_resp.json()
+    assert len(base_json["actions"]) == 1
 
-    for _ in range(100):
+    # 1. Determinism with identical state (cleared history between calls)
+    for _ in range(50):
+        service.governance.clear()
         resp = client.post("/v1/tick", json={"now": "2026-04-26T10:35:00Z", "available_triggers": [trg_data["id"]]})
         assert resp.json() == base_json
+
+    # 2. Determinism of repeated ticks under governance (all suppressed duplicates)
+    supp_resp = client.post("/v1/tick", json={"now": "2026-04-26T10:35:00Z", "available_triggers": [trg_data["id"]]})
+    supp_json = supp_resp.json()
+    assert supp_json == {"actions": []}
+
+    for _ in range(50):
+        resp = client.post("/v1/tick", json={"now": "2026-04-26T10:35:00Z", "available_triggers": [trg_data["id"]]})
+        assert resp.json() == supp_json
 
 
 def test_100_runs_reply_determinism():
