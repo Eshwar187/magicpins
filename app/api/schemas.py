@@ -97,7 +97,7 @@ class ReplyBody(BaseModel):
     conversation_id: str
     merchant_id: Optional[str] = None
     customer_id: Optional[str] = None
-    from_role: Literal["merchant", "customer"]
+    from_role: Literal["merchant", "customer"] = "merchant"
     message: str
     received_at: str
     turn_number: int = 2

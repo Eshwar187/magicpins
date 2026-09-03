@@ -23,9 +23,8 @@ def test_metadata_get():
         assert k not in data
 
 
-def test_metadata_post():
-    """Verify POST /v1/metadata is also supported and returns identical metadata."""
+def test_metadata_post_not_allowed():
+    """Verify POST /v1/metadata returns 405 Method Not Allowed per challenge contract."""
     client = TestClient(app)
     resp = client.post("/v1/metadata")
-    assert resp.status_code == 200
-    assert resp.json() == client.get("/v1/metadata").json()
+    assert resp.status_code == 405

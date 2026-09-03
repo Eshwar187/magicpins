@@ -37,7 +37,6 @@ def healthz(service: EngineService = Depends(get_service)) -> HealthzResponse:
 
 
 @router.get("/metadata", response_model=MetadataResponse)
-@router.post("/metadata", response_model=MetadataResponse)
 def metadata(service: EngineService = Depends(get_service)) -> MetadataResponse:
     """Metadata detailing candidate bot identity, model approach, and version."""
     return service.get_metadata()

@@ -166,13 +166,12 @@ class EngineService:
         """Handle synchronous replies from merchant or customer in active conversation."""
         msg_lower = message.lower().strip()
 
-        with self._lock:
-            self._conversations.setdefault(conversation_id, []).append({
-                "from": from_role,
-                "body": message,
-                "turn": turn_number,
-                "received_at": received_at,
-            })
+        if not msg_lower:
+            return ReplyResponse(
+                action="wait",
+                wait_seconds=300,
+                rationale="Empty message received. Standing by for message content.",
+            )
 
         # 1. Detect canned auto-replies (e.g. WhatsApp Business auto-greeting)
         auto_reply_patterns = [
@@ -184,16 +183,33 @@ class EngineService:
             "away from the phone",
         ]
         is_auto = any(pat in msg_lower for pat in auto_reply_patterns)
-        if is_auto:
-            with self._lock:
-                history = self._conversations.get(conversation_id, [])
-                auto_count = sum(1 for turn in history if turn.get("is_auto"))
-                history[-1]["is_auto"] = True
 
-            if auto_count >= 2:  # 3rd consecutive auto-reply
+        with self._lock:
+            if conversation_id not in self._conversations:
+                self._conversations[conversation_id] = []
+            self._conversations[conversation_id].append({
+                "turn_number": turn_number,
+                "from_role": from_role,
+                "message": message,
+                "received_at": received_at,
+                "is_auto": is_auto,
+            })
+            history = self._conversations[conversation_id]
+
+            # Count consecutive auto-replies ending at current turn
+            consecutive_auto = 0
+            if is_auto:
+                for turn in reversed(history):
+                    if turn.get("is_auto"):
+                        consecutive_auto += 1
+                    else:
+                        break
+
+        if is_auto:
+            if consecutive_auto >= 3:
                 return ReplyResponse(
                     action="end",
-                    rationale="Persistent merchant auto-reply detected across multiple turns. Gracefully closing conversation.",
+                    rationale="Persistent merchant auto-reply detected (3 consecutive auto-replies). Gracefully closing conversation.",
                 )
             return ReplyResponse(
                 action="wait",

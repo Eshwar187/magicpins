@@ -53,9 +53,9 @@ The service exposes all 5 required endpoints under `/v1`:
   }
   ```
 
-### 2.2 `GET /v1/metadata` and `POST /v1/metadata`
-- **Purpose**: Exposes bot identity, model approach, and version.
-- **Request**: None
+### 2.2 `GET /v1/metadata`
+- **Purpose**: Exposes bot identity, model approach, and version per challenge testing brief.
+- **Request**: None (GET only; POST was verified not required by contract and is not exposed).
 - **Response (200 OK)**:
   ```json
   {
@@ -117,8 +117,23 @@ The service exposes all 5 required endpoints under `/v1`:
   ```
   *(Note: If triggers lead to `WAIT` or `END`, `actions` returns `[]`, fulfilling the challenge restraint requirement).*
 
-### 2.5 `POST /v1/reply`
-- **Purpose**: Synchronous reply handling for active conversations.
+### 2.5 `POST /v1/reply` — Synchronous Reply Protocol
+- **Classification**: **Phase-4 challenge-facing synchronous reply protocol.**
+- **Purpose**: Synchronous reply handling for active conversations, implementing deterministic conversational boundary rules and canned responses for protocol compliance.
+- **Hard Boundary Rules**: This protocol strictly does NOT:
+  - invoke proactive business decision logic
+  - select merchant offers
+  - select campaign actions
+  - alter Phase 2 decisions
+  - invoke Phase 3 composition
+  - create triggers
+  - implement persistent slot memory
+  - perform semantic conversation reasoning
+  - implement a full conversation state machine (deferred to Phase 6)
+- **Consecutive Auto-Reply Semantics**:
+  - Counts only current *consecutive* auto-replies from the tail of the conversation.
+  - $\ge 3$ consecutive auto-replies $\to$ `action: "end"` (graceful exit).
+  - Any non-auto message from the merchant resets the consecutive run to 0. Interleaved runs (`auto` $\to$ `normal` $\to$ `auto`) do not trigger premature termination.
 - **Request**:
   ```json
   {
@@ -134,7 +149,7 @@ The service exposes all 5 required endpoints under `/v1`:
 - **Response (200 OK)**:
   - Engagement: `{"action": "send", "body": "...", "cta": "binary_confirm", "rationale": "..."}`
   - Auto-reply backoff: `{"action": "wait", "wait_seconds": 14400, "rationale": "..."}`
-  - Opt-out / Hostile: `{"action": "end", "rationale": "..."}`
+  - Opt-out / Hostile / Persistent Auto-reply: `{"action": "end", "rationale": "..."}`
 
 ---
 
@@ -163,11 +178,15 @@ The service exposes all 5 required endpoints under `/v1`:
 
 ---
 
-## 6. Determinism Guarantees
-
-- Zero wall-clock dependence: Business logic derives timing from `body.now` (or payload delivery timestamps). Zero calls to `datetime.now()` in business logic.
-- Zero randomness: Zero calls to `random` or unseeded uuid generation.
-- Zero network I/O or external API dependencies.
+## 6. Determinism & Wall-Clock Audit
+- **No Wall-Clock Dependency Influences Decisions or Outputs**:
+  - Proactive business logic derives timing strictly from simulation time (`body.now` on `/v1/tick` or trigger payload timestamps).
+  - Synchronous reply logic derives timing from `body.received_at` on `/v1/reply`.
+  - Zero calls to `datetime.now()` in business logic, facts, signals, candidate generation, scoring, decisions, compositions, or API response bodies/CTAs/actions.
+  - `stored_at` in `ContextEntry` and context ACK responses is audit metadata only; it never feeds into any downstream decision, composition, or scoring logic.
+  - `uptime_seconds` in `GET /v1/healthz` uses process monotonic clock (`time.monotonic()`) exclusively for diagnostic liveness reporting.
+- **Zero Randomness**: Zero calls to `random` or unseeded UUID generation.
+- **Zero Network I/O**: Zero external LLM or HTTP calls. Pure deterministic in-process execution.
 - Verified in `tests/test_api_determinism.py`: 100 repeated requests produce bit-for-bit identical JSON responses.
 
 ---

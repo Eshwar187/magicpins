@@ -36,3 +36,23 @@ def test_100_runs_api_determinism():
     for _ in range(100):
         resp = client.post("/v1/tick", json={"now": "2026-04-26T10:35:00Z", "available_triggers": [trg_data["id"]]})
         assert resp.json() == base_json
+
+
+def test_100_runs_reply_determinism():
+    """Verify that 100 repeated reply requests with identical input produce byte-identical responses."""
+    client = TestClient(app)
+    payload = {
+        "conversation_id": "conv_det_reply",
+        "merchant_id": "m_001_drmeera",
+        "from_role": "merchant",
+        "message": "Ok lets do it. Whats next?",
+        "received_at": "2026-04-26T10:42:00Z",
+        "turn_number": 2,
+    }
+    base_resp = client.post("/v1/reply", json=payload)
+    base_json = base_resp.json()
+
+    for _ in range(100):
+        resp = client.post("/v1/reply", json=payload)
+        assert resp.json() == base_json
+
