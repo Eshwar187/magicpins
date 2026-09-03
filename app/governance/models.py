@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from typing import Optional
+from pydantic import BaseModel
 
 
 class OutreachDisposition(str, Enum):
@@ -17,9 +17,6 @@ class SuppressionReasonCode(str, Enum):
     """Deterministic, machine-readable suppression reason taxonomy."""
     ELIGIBLE = "ELIGIBLE"
     DUPLICATE_SUPPRESSED = "DUPLICATE_SUPPRESSED"
-    COOLDOWN_ACTIVE = "COOLDOWN_ACTIVE"
-    MERCHANT_FREQUENCY_CAPPED = "MERCHANT_FREQUENCY_CAPPED"
-    CUSTOMER_FREQUENCY_CAPPED = "CUSTOMER_FREQUENCY_CAPPED"
     CONSENT_RESTRICTED = "CONSENT_RESTRICTED"
     DECISION_WAIT_OR_END = "DECISION_WAIT_OR_END"
     INVALID_COMPOSITION = "INVALID_COMPOSITION"
@@ -48,9 +45,8 @@ class OutreachAuditTrace(BaseModel):
     suppression_key: str
     evaluated_at: str
     rule_applied: str
-    last_matching_send: Optional[str] = None
-    seconds_since_last_send: Optional[float] = None
-    cooldown_window_seconds: Optional[float] = None
+    prior_outreach_id: Optional[str] = None
+    prior_send_timestamp: Optional[str] = None
 
 
 class OutreachDecision(BaseModel):

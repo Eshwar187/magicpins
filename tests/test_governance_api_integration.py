@@ -1,4 +1,4 @@
-"""End-to-end integration and adversarial tests for Phase 5 outreach governance."""
+"""End-to-end integration and repeated-tick stress tests for Phase 5.2 outreach governance."""
 
 import json
 from pathlib import Path
@@ -37,31 +37,40 @@ def populated_client():
     service.clear()
 
 
-def test_sequential_tick_cooldown_lifecycle(populated_client):
-    """Verify lifecycle: T1 sends -> duplicate T1 suppresses -> T2 after cooldown sends."""
-    trg_id = "trg_018_supply_atorvastatin_recall"  # Supply alert, expires 2026-05-30
+def test_sequential_tick_exact_dedup_lifecycle(populated_client):
+    """Verify exact deduplication lifecycle: T0 sends, all future ticks for same key suppress without decaying cooldown."""
+    trg_id = "trg_018_supply_atorvastatin_recall"
 
     # 1. First tick at T0 -> SEND
     r1 = populated_client.post("/v1/tick", json={"now": "2026-04-26T10:00:00Z", "available_triggers": [trg_id]}).json()
     assert len(r1["actions"]) == 1
 
-    # 2. Immediate re-tick at T0+10min -> SUPPRESS
-    r2 = populated_client.post("/v1/tick", json={"now": "2026-04-26T10:10:00Z", "available_triggers": [trg_id]}).json()
+    # 2. Immediate re-tick at T0 -> SUPPRESS
+    r2 = populated_client.post("/v1/tick", json={"now": "2026-04-26T10:00:00Z", "available_triggers": [trg_id]}).json()
     assert r2 == {"actions": []}
 
-    # 3. Tick after 32 days (post-monthly cooldown) -> SEND
-    r3 = populated_client.post("/v1/tick", json={"now": "2026-05-29T11:00:00Z", "available_triggers": [trg_id]}).json()
-    assert len(r3["actions"]) == 1
+    # 3. Tick after 1 day -> SUPPRESS
+    r3 = populated_client.post("/v1/tick", json={"now": "2026-04-27T10:00:00Z", "available_triggers": [trg_id]}).json()
+    assert r3 == {"actions": []}
+
+    # 4. Tick after 30 days -> SUPPRESS
+    r4 = populated_client.post("/v1/tick", json={"now": "2026-05-26T10:00:00Z", "available_triggers": [trg_id]}).json()
+    assert r4 == {"actions": []}
+
+    # 5. Tick after 365 days -> SUPPRESS (no cooldown expiration)
+    r5 = populated_client.post("/v1/tick", json={"now": "2027-04-26T10:00:00Z", "available_triggers": [trg_id]}).json()
+    assert r5 == {"actions": []}
 
 
-def test_merchant_multi_trigger_batch_governance(populated_client):
-    """Verify single merchant with multiple triggers in one batch only sends 1 proactive message."""
-    # Dr. Meera has trg_001 (research) and trg_022 (cde webinar)
-    trgs = ["trg_001_research_digest_dentists", "trg_022_cde_webinar_dentists"]
+def test_merchant_multi_trigger_different_keys_both_send(populated_client):
+    """Verify single merchant with distinct triggers in one batch sends both without artificial aggregate frequency blocking."""
+    # Merchant m_002 (Bharat Dental) has trg_004 (perf dip) and trg_005 (renewal)
+    trgs = ["trg_004_perf_dip_bharat", "trg_005_renewal_due_bharat"]
     resp = populated_client.post("/v1/tick", json={"now": "2026-04-26T10:00:00Z", "available_triggers": trgs}).json()
-    # First qualifies, second is suppressed under merchant daily frequency cap
-    assert len(resp["actions"]) == 1
-    assert resp["actions"][0]["trigger_id"] == "trg_001_research_digest_dentists"
+    assert len(resp["actions"]) == 2
+    sent_trgs = {a["trigger_id"] for a in resp["actions"]}
+    assert "trg_004_perf_dip_bharat" in sent_trgs
+    assert "trg_005_renewal_due_bharat" in sent_trgs
 
 
 @pytest.mark.parametrize("trg_id", [

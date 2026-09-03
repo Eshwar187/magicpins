@@ -1,150 +1,123 @@
-# Phase 5 — Outreach Governance, Suppression & Frequency Control Policy
+# Phase 5 — Outreach Governance & Exact Deduplication Policy
 
 ## 1. Executive Summary & Core Contract
 
 Phase 2 answers: **WHAT should Vera do?**  
 Phase 3 answers: **HOW should Vera express it?**  
-Phase 5 answers: **SHOULD Vera actually send it right now?**
+Phase 5 answers: **CAN THIS ALREADY-COMPOSED OUTBOUND ACTION BE TRANSMITTED RIGHT NOW?**
 
-Phase 5 is an **outreach governance and transmission barrier**. It sits strictly between Phase 3 message composition and Phase 4 API serialization:
+Phase 5 serves exclusively as an **outreach governance transmission barrier** between Phase 3 message composition and Phase 4 API serialization:
 
 ```text
-Phase 1
-Normalized Authoritative Context (ContextStore)
+Phase 1: Normalized Authoritative Context (ContextStore)
               ↓
-Phase 2
-Deterministic Decision (WHAT)
+Phase 2: Deterministic Decision Engine (WHAT)
               ↓
-Phase 3
-Grounded Message Composition (HOW)
+Phase 3: Grounded Message Composer (HOW)
               ↓
-Phase 5
-Outreach Governance & Policy Barrier (SEND or SUPPRESS)
+Phase 5: Outreach Governance Barrier (EXACT DEDUP & CONSENT)
               ↓
-Phase 4
-Challenge API Response (/v1/tick)
+Phase 4: Challenge API Response (/v1/tick)
 ```
 
-### Critical Boundary Rule
-> **Phase 5 may prevent transmission (SUPPRESS), but it may NOT alter, re-score, substitute, or reinterpret the Phase 2 Decision or Phase 3 ComposedMessage.**
+### Critical Policy Grounding Statement
+> **The challenge directly specifies `suppression_key`-based deduplication (`suppression_key: str # for dedup`, `challenge-brief.md` L125; `used by Redis dedup to prevent re-sends`, `engagement-design.md` L94). It does NOT specify decaying cooldowns or aggregate merchant/customer frequency caps. Therefore Phase 5 performs exact suppression-key deduplication without inferred expiration.**
+
+> **Date, week, month, quarter, `30d`, and `6mo` tokens appearing inside suppression keys are treated strictly as unique event, cohort, or artifact identifiers, not governance cadence instructions.**
 
 ---
 
-## 2. Outreach Decision Contract
+## 2. Target Phase 5 Decision Pipeline
 
-Phase 5 introduces a strongly typed, deterministic decision model:
+For any composed message, transmission eligibility is evaluated strictly as:
 
-```python
-class OutreachDisposition(str, Enum):
-    SEND = "SEND"
-    SUPPRESS = "SUPPRESS"
+```text
+1. Phase 2 WAIT / END
+    → SUPPRESS (reason_code = DECISION_WAIT_OR_END)
 
-class SuppressionReasonCode(str, Enum):
-    ELIGIBLE = "ELIGIBLE"
-    DUPLICATE_SUPPRESSED = "DUPLICATE_SUPPRESSED"
-    COOLDOWN_ACTIVE = "COOLDOWN_ACTIVE"
-    MERCHANT_FREQUENCY_CAPPED = "MERCHANT_FREQUENCY_CAPPED"
-    CUSTOMER_FREQUENCY_CAPPED = "CUSTOMER_FREQUENCY_CAPPED"
-    CONSENT_RESTRICTED = "CONSENT_RESTRICTED"
-    DECISION_WAIT_OR_END = "DECISION_WAIT_OR_END"
-    INVALID_COMPOSITION = "INVALID_COMPOSITION"
-    TENANT_MISMATCH = "TENANT_MISMATCH"
+2. Invalid Phase 3 composition (empty body, missing CTA, empty suppression key)
+    → SUPPRESS (reason_code = INVALID_COMPOSITION)
 
-class OutreachDecision(BaseModel):
-    disposition: OutreachDisposition
-    reason_code: SuppressionReasonCode
-    reason: str
-    suppression_key: str
-    target_scope: str
-    merchant_id: Optional[str] = None
-    customer_id: Optional[str] = None
-    simulated_at: str
-    previous_outreach_id: Optional[str] = None
+3. Customer-scoped outreach without valid customer consent
+    → SUPPRESS (reason_code = CONSENT_RESTRICTED)
+
+4. Previously transmitted identical (tenant_key, suppression_key)
+    → SUPPRESS (reason_code = DUPLICATE_SUPPRESSED)
+
+5. Otherwise
+    → SEND (reason_code = ELIGIBLE)
 ```
+
+No other business policy, scoring rule, or rate limit may influence transmission.
 
 ---
 
 ## 3. Suppression Reason Taxonomy
 
-Every evaluation produces a deterministic machine-readable `reason_code` and human-readable `reason`:
+The suppression reason taxonomy contains only behaviorally reachable, evidence-backed reason codes:
 
 1. **`ELIGIBLE`**:
-   - Passed all deduplication, cooldown, frequency, consent, and composition gates. Permitted to transmit.
-2. **`DECISION_WAIT_OR_END`**:
+   - Passed composition validation, customer consent checks, and has not been previously transmitted for this tenant. Permitted to transmit.
+2. **`DUPLICATE_SUPPRESSED`**:
+   - An outreach matching the exact composite identity `(tenant_key, suppression_key)` has already been recorded in history.
+3. **`DECISION_WAIT_OR_END`**:
    - Phase 2 decision was `WAIT` or `END`. Suppressed fail-closed to honor intentional restraint.
-3. **`CONSENT_RESTRICTED`**:
-   - Customer is missing consent, has opted out (`reminder_opt_in == False`), or the requested outreach type is not present in `consent.scope`.
-4. **`INVALID_COMPOSITION`**:
-   - The composed message failed validation (missing suppression key, empty body on SEND, or malformed CTA).
-5. **`DUPLICATE_SUPPRESSED`**:
-   - An outreach with the exact same tenant-scoped suppression key was previously transmitted in the current simulation epoch.
-6. **`COOLDOWN_ACTIVE`**:
-   - The elapsed simulation time since the previous outreach matching this suppression key or trigger family is less than the configured cooldown window.
-7. **`MERCHANT_FREQUENCY_CAPPED`**:
-   - The merchant has already received the maximum permitted proactive messages within the rolling simulation window (default: 1 proactive message per 24 hours, or 4 per 7 days), unless overridden by an urgency-5 emergency safety alert.
-8. **`CUSTOMER_FREQUENCY_CAPPED`**:
-   - The customer has already received a message within the rolling customer cooldown window (default: 1 message per 7 days).
-9. **`TENANT_MISMATCH`**:
-   - Missing or mismatched tenant identifiers.
+4. **`CONSENT_RESTRICTED`**:
+   - Customer context is missing, customer explicitly opted out (`reminder_opt_in == False`), or customer has empty consent scope.
+5. **`INVALID_COMPOSITION`**:
+   - Composed message has an empty body, missing CTA, or empty suppression key.
+6. **`TENANT_MISMATCH`**:
+   - Unrecognized or malformed tenant identifier.
+
+All unsupported reason codes (`COOLDOWN_ACTIVE`, `MERCHANT_FREQUENCY_CAPPED`, `CUSTOMER_FREQUENCY_CAPPED`) have been removed.
 
 ---
 
-## 4. Suppression Key Semantics & Tenant Isolation
+## 4. Exact Deduplication & Tenant Semantics
 
-### Suppression Key Scopes
-In magicpin, suppression keys have three scopes:
-1. **Merchant-scoped**: `curious_ask:{merchant_id}:{window}`, `perf_dip:{merchant_id}:{metric}:{window}`, `planning:{merchant_id}:{initiative}:{window}`.
-2. **Customer-scoped**: `recall:{customer_id}:{cadence}`, `bridal_followup:{customer_id}`, `winback:{customer_id}`, `refill:{customer_id}:{month}`.
-3. **Category-scoped**: `research:{category}:{cadence}`, `compliance:{vertical}:{year}`, `cde:{category}:{date}`.
+### Deduplication Identity
+Deduplication identity is defined strictly as the tuple:
+$$\text{Deduplication Identity} = (\text{tenant\_key}, \text{suppression\_key})$$
 
-### Cross-Tenant Deduplication Isolation
-To prevent accidental cross-tenant suppression:
-- Deduplication is tracked by composite key: `(tenant_id, suppression_key)`.
-  - For merchant-targeted outreach, `tenant_id` is `merchant_id`.
-  - For customer-targeted outreach, `tenant_id` is `(merchant_id, customer_id)`.
-- **Guarantee**: Even if two merchants share a category-level suppression key (e.g. `research:dentists:2026-W17`), sending to Merchant A records `(m_001, research:dentists:2026-W17)`, leaving Merchant B (`m_002`) completely eligible.
+Once an outreach matching `(tenant_key, suppression_key)` is transmitted and recorded in the in-memory history:
+- Any subsequent attempt to transmit the identical pair is **SUPPRESSED** as `DUPLICATE_SUPPRESSED`.
+- There is **no decaying cooldown window** and **no automatic expiration** (no 24h, 7d, 30d, or 90d reset).
+- Different suppression keys for the same merchant or customer are completely independent and evaluate on their own merits without being blocked by previous messages.
 
----
-
-## 5. Cooldown & Frequency Policy
-
-### Cooldown Windows (in Simulation Seconds)
-Based on challenge requirements and domain cadence:
-- **Same Suppression Key Cooldown**:
-  - Weekly digests / planning (`2026-Wxx`): **168 hours (7 days = 604,800s)**.
-  - Monthly / refills (`2026-xx`): **720 hours (30 days = 2,592,000s)**.
-  - Event / daily offers (`2026-MM-DD`): **24 hours (86,400s)**.
-  - General default for exact suppression key: **168 hours (7 days)**.
-- **Merchant Frequency Cap**:
-  - Maximum **1 proactive message per 24 hours (86,400s)** per merchant.
-  - Maximum **4 proactive messages per 7 days (604,800s)** per merchant.
-  - *Emergency Exemption*: Urgency-5 safety alerts (e.g. manufacturer drug recalls) bypass non-safety frequency caps.
-- **Customer Frequency Cap**:
-  - Maximum **1 message per 7 days (604,800s)** per customer to prevent consumer churn and unsubscribe rates.
+### Tenant Isolation Semantics
+1. **Merchant-scoped outreach** (`target_scope == "merchant"`):
+   - `tenant_key = f"m:{merchant_id}"`
+   - An outreach to Merchant 1 with key $K$ (`m:m_001`, $K$) does **not** suppress Merchant 2 with the same key (`m:m_002`, $K$).
+2. **Customer-scoped outreach** (`target_scope == "customer"`):
+   - `tenant_key = f"c:{merchant_id}:{customer_id}"`
+   - An outreach to Customer 1 under Merchant 1 with key $K$ (`c:m_001:c_001`, $K$) does **not** suppress Customer 2 under Merchant 1 (`c:m_001:c_002`, $K$).
+   - An outreach to Customer 1 under Merchant 1 does **not** suppress Customer 1 under Merchant 2 (`c:m_002:c_001`, $K$).
 
 ---
 
-## 6. Simulation Time & Determinism
+## 5. Consent & Architectural Restraint Boundaries
 
-1. **Zero Wall-Clock Dependency**:
-   - All time differences ($\Delta t = \text{now} - \text{previous\_sent\_at}$) are calculated using the ISO 8601 simulation timestamp passed in `body.now`.
-   - Zero calls to `datetime.now()` or `time.time()`.
-2. **Backwards Time Handling**:
-   - If simulation time moves backwards ($\Delta t < 0$), the policy treats the prior outreach as occurring in the future and fails safe by suppressing duplicate outreach.
-3. **Determinism Guarantee**:
-   - Identical `(Decision, ComposedMessage, History, now)` inputs produce 100% bit-for-bit identical `OutreachDecision`.
-
----
-
-## 7. Atomic Concurrency Model
-
-- The `OutreachStore` executes the check-and-record operation atomically within a re-entrant lock (`threading.RLock`).
-- **Invariant**: If Thread A and Thread B simultaneously evaluate the same suppression key for the same merchant at timestamp $T$, exactly one thread records the outreach and returns `SEND`; the second thread immediately encounters `COOLDOWN_ACTIVE` / `DUPLICATE_SUPPRESSED` and returns `SUPPRESS`.
+1. **Consent Boundary**:
+   - Customer consent is strictly enforced fail-closed. Missing consent, explicit opt-out (`reminder_opt_in == False`), or empty consent scope immediately results in `SUPPRESS` (`CONSENT_RESTRICTED`).
+   - Merchant-level outreach (e.g. research digests, performance dips, partner planning) is evaluated at merchant scope and is never blocked by customer consent.
+2. **WAIT / END Invariant**:
+   - If Phase 2 determines `ActionType.WAIT` or `ActionType.END`, Phase 5 returns `SUPPRESS` (`DECISION_WAIT_OR_END`).
+   - Phase 5 **never transforms a WAIT or END into a SEND**.
 
 ---
 
-## 8. Preserving WAIT and END
+## 6. Atomic Concurrency Model
 
-- If Phase 2 outputs `ActionType.WAIT`, Phase 5 returns `OutreachDisposition.SUPPRESS` with `reason_code=DECISION_WAIT_OR_END`.
-- If Phase 2 outputs `ActionType.END`, Phase 5 returns `OutreachDisposition.SUPPRESS` with `reason_code=DECISION_WAIT_OR_END`.
-- The internal decision remains preserved for auditing; `/v1/tick` emits `{"actions": []}`.
+- All check-and-record operations execute inside `OutreachStore._lock` (`threading.RLock`).
+- **Race Condition Invariant**:
+  - If 20 simultaneous threads evaluate the same `(tenant_key, suppression_key)` at timestamp $T$, exactly **1 thread** wins and returns `SEND`; the remaining **19 threads** encounter the recorded send and return `SUPPRESS` (`DUPLICATE_SUPPRESSED`).
+  - Exactly 1 record is created in history.
+  - Distinct suppression keys evaluated concurrently do not block each other.
+
+---
+
+## 7. Zero Wall-Clock Dependency
+
+- All audit trace timestamps are recorded using the simulation timestamp provided in the tick request (`body.now`).
+- Zero calls to `datetime.now()` or `time.time()`.
+- Identical requests against identical history yield 100% bit-for-bit identical decisions.

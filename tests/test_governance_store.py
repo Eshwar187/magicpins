@@ -60,9 +60,37 @@ def test_concurrency_race_single_winner():
 
     assert len(sends) == 1, f"Expected exactly 1 winner, got {len(sends)}"
     assert len(suppresses) == 19
-    assert all(r.reason_code == SuppressionReasonCode.COOLDOWN_ACTIVE for r in suppresses)
+    assert all(r.reason_code == SuppressionReasonCode.DUPLICATE_SUPPRESSED for r in suppresses)
     assert store.counts()["sent"] == 1
     assert store.counts()["suppressed"] == 19
+
+
+def test_concurrency_different_keys_independent_winners():
+    """Verify that 20 concurrent threads across 2 distinct keys produce 1 SEND per key."""
+    store = OutreachStore()
+    decision = make_decision()
+    comp_a = make_composed(key="key_alpha")
+    comp_b = make_composed(key="key_beta")
+    now = "2026-04-26T10:00:00Z"
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = []
+        for _ in range(10):
+            futures.append(executor.submit(store.evaluate_and_record, decision, comp_a, now))
+            futures.append(executor.submit(store.evaluate_and_record, decision, comp_b, now))
+        for f in concurrent.futures.as_completed(futures):
+            results.append(f.result())
+
+    sends_a = [r for r in results if r.disposition == OutreachDisposition.SEND and r.suppression_key == "key_alpha"]
+    sends_b = [r for r in results if r.disposition == OutreachDisposition.SEND and r.suppression_key == "key_beta"]
+    suppresses = [r for r in results if r.disposition == OutreachDisposition.SUPPRESS]
+
+    assert len(sends_a) == 1, f"Expected exactly 1 winner for key A, got {len(sends_a)}"
+    assert len(sends_b) == 1, f"Expected exactly 1 winner for key B, got {len(sends_b)}"
+    assert len(suppresses) == 18
+    assert store.counts()["sent"] == 2
+    assert store.counts()["suppressed"] == 18
 
 
 def test_tenant_isolation_identical_key():
