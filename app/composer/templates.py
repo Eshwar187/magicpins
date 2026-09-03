@@ -89,7 +89,7 @@ TEMPLATES: Dict[str, TemplateDefinition] = {
         target_scope="merchant",
         cta_type="binary_yes_no",
         body_format=(
-            "{salutation}, here is a concrete starter structure for your {topic} package — you can review and adjust:\n\n"
+            "{salutation}, here is a concrete starter structure for your {topic} — you can review and adjust:\n\n"
             "{structure_text}\n\n"
             "Local workplace offices in {locality} are within your service radius. Would you like me to draft a concise "
             "outreach note to share with their facilities coordinators?"
@@ -103,7 +103,7 @@ TEMPLATES: Dict[str, TemplateDefinition] = {
         target_scope="merchant",
         cta_type="binary_yes_no",
         body_format=(
-            "{salutation}, your {metric_name} is down {delta_pct}% this week — but please note this matches the typical "
+            "{salutation}, your {metric_name} dropped {delta_pct}% this week — but please note this matches the typical "
             "{seasonal_window} category acquisition lull. Recommended strategy: pause unnecessary ad spend right now and protect "
             "your budget for the peak season. In the meantime, concentrate retention on your {member_count} active members. "
             "Would you like me to prepare a seasonal attendance challenge draft to keep them engaged through this window?"
@@ -144,7 +144,7 @@ TEMPLATES: Dict[str, TemplateDefinition] = {
         target_scope="customer",
         cta_type="binary_confirm",
         body_format=(
-            "Namaste — {merchant_name} here. {patient_ref} monthly medicines ({molecule_list}) are scheduled to run out on {runout_date}. "
+            "Namaste — {merchant_name} here. {patient_ref} monthly medicines ({molecule_list}) are scheduled to run out {runout_date}. "
             "Your regular brands and dosages are packed and ready. {discount_text} Free home delivery to your saved address. "
             "Reply CONFIRM to arrange dispatch, or call us if there is any update to your prescription."
         ),

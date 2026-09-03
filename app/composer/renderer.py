@@ -32,8 +32,10 @@ def _get_customer_salutation(customer: Optional[CustomerStateModel]) -> str:
     name = customer.identity.name
     if not name or name.startswith("("):
         return "there"
-    # Take first name if full name provided
-    return name.split()[0]
+    parts = name.split()
+    if len(parts) >= 2 and parts[0].lower() in ("mr.", "mr", "mrs.", "mrs", "ms.", "ms", "dr.", "dr"):
+        return f"{parts[0]} {parts[1]}"
+    return parts[0]
 
 
 def _format_delta_abs(val: Any) -> str:
@@ -211,7 +213,10 @@ def render_decision(
         countdown_text = f"{days_to_wedding} days" if days_to_wedding else "the date approaching"
         program_text = "tailored skin-prep and bridal glow program"
         offer = decision.supporting_offer
-        offer_text = f"Featured package: {offer.get('title')}" if offer else "Comprehensive package includes trial and take-home care"
+        if offer and any(w in offer.get("title", "").lower() for w in ("bridal", "glow", "skin", "wedding", "prep")):
+            offer_text = f"Featured package: {offer.get('title')}"
+        else:
+            offer_text = "Comprehensive package includes consultation and personalized home-care kit"
         pref_slot = customer.preferences.preferred_slots if customer and customer.preferences else None
         slot_text = pref_slot or "Saturday 4pm slot"
 
@@ -258,7 +263,7 @@ def render_decision(
     # 6. Continue Active Planning Intent
     if act == ActionType.CONTINUE_PLANNING:
         tmpl = TEMPLATES["vera_continue_planning_v1"]
-        topic = payload.get("intent_topic", "corporate lunch package")
+        topic = payload.get("intent_topic", "corporate lunch package").replace("_", " ")
         locality = merchant.identity.locality or merchant.identity.city or "your area"
         structure_text = (
             f"1. Standard tier (10-24 orders): ₹25 off retail per meal + free delivery\n"
@@ -281,7 +286,8 @@ def render_decision(
         tmpl = TEMPLATES["vera_reframe_seasonal_dip_v1"]
         metric_name = payload.get("metric", "views")
         delta_pct = _format_delta_abs(payload.get("delta_pct", -0.30))
-        seasonal_window = payload.get("season_note", "April-June")
+        raw_season = payload.get("season_note", "April-June")
+        seasonal_window = "April-June" if "apr_jun" in raw_season.lower() else raw_season.replace("_", " ")
         member_count = str(_get_aggregate_val(merchant.customer_aggregate, "total_active_members", 245))
 
         params = {
@@ -300,7 +306,7 @@ def render_decision(
         sender_name = merchant.identity.owner_first_name or merchant.identity.name
         days_lapsed = payload.get("days_since_last_visit", 60)
         time_away = f"{int(days_lapsed // 7)} weeks" if days_lapsed >= 14 else f"{days_lapsed} days"
-        focus_area = payload.get("previous_focus", "wellness")
+        focus_area = payload.get("previous_focus", "wellness").replace("_", " ")
         offer = decision.supporting_offer
         offer_text = f"Welcome back special: {offer.get('title')}" if offer else "First session is completely complimentary"
 
@@ -339,7 +345,8 @@ def render_decision(
     if act == ActionType.CUSTOMER_REFILL:
         tmpl = TEMPLATES["customer_chronic_refill_v1"]
         molecules = ", ".join(payload.get("molecule_list", ["regular medications"]))
-        runout_date = payload.get("runout_date", "in 3 days")
+        raw_runout = payload.get("runout_date", "in 3 days")
+        runout_date = raw_runout if raw_runout.startswith("in ") else f"on {raw_runout}"
         patient_ref = f"{customer_name}'s" if customer_name != "there" else "Your"
         offer = decision.supporting_offer
         discount_text = f"Active pharmacy benefit: {offer.get('title')} applied." if offer else "Senior citizen discount applied."
