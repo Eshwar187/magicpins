@@ -15,7 +15,7 @@ from app.domain.models.trigger import TriggerState
 from app.engine.actions import ActionType
 from app.engine.decide import decide
 from app.composer.compose import compose
-from app.conversation import ConversationStore
+from app.conversation.store import ConversationStore
 from app.governance import OutreachDisposition, OutreachStore
 from app.api.schemas import ActionItem, ContextCounts, HealthzResponse, MetadataResponse, ReplyResponse, TickResponse
 

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Dict, List, Optional
-from app.api.schemas import ReplyRequest, ReplyResponse
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from app.conversation.models import (
     ConversationEntity,
     ConversationState,
@@ -12,6 +11,9 @@ from app.conversation.models import (
     TransitionResult,
 )
 from app.conversation.state_machine import process_turn
+
+if TYPE_CHECKING:
+    from app.api.schemas import ReplyRequest, ReplyResponse
 
 
 class ConversationStore:
@@ -84,7 +86,7 @@ class ConversationStore:
             entity.last_action = "send"
             entity.last_updated_at = now
 
-    def process_turn(self, request: ReplyRequest) -> TransitionResult:
+    def process_turn(self, request: Any) -> TransitionResult:
         """Process turn and return structured transition and route."""
         with self._lock:
             entity = self.get_or_create(
@@ -101,8 +103,9 @@ class ConversationStore:
                 turn_number=request.turn_number,
             )
 
-    def process_reply(self, request: ReplyRequest) -> ReplyResponse:
+    def process_reply(self, request: Any) -> Any:
         """Process an inbound reply synchronously under lock."""
+        from app.api.schemas import ReplyResponse
         with self._lock:
             result = self.process_turn(request)
             return ReplyResponse(

@@ -151,46 +151,95 @@ def compose_action_continuation(
     suppression_key = _build_suppression_key(decision, category, merchant, trigger, customer)
     cid = customer.customer_id if customer else None
 
-    # Deterministic actioning body grounded in the action type
+    # Handle Non-Outreach Actions (WAIT & END)
+    if act == ActionType.WAIT:
+        return ComposedMessage(
+            action="wait",
+            action_type=ActionType.WAIT,
+            target_scope=target_scope,
+            send_as="vera",
+            body="",
+            cta="none",
+            suppression_key=suppression_key,
+            rationale=decision.primary_reason or "Standing down based on Phase 2 safety policy",
+            conversation_id=conv_id,
+            merchant_id=merchant.merchant_id,
+            customer_id=cid,
+            trigger_id=trigger.id,
+            template_name="noop_wait_v1",
+            template_params=[],
+        )
+
+    if act == ActionType.END:
+        return ComposedMessage(
+            action="end",
+            action_type=ActionType.END,
+            target_scope=target_scope,
+            send_as="vera",
+            body="",
+            cta="none",
+            suppression_key=suppression_key,
+            rationale=decision.primary_reason or "Conversation terminated by Phase 2 policy",
+            conversation_id=conv_id,
+            merchant_id=merchant.merchant_id,
+            customer_id=cid,
+            trigger_id=trigger.id,
+            template_name="noop_end_v1",
+            template_params=[],
+        )
+
+    payload = trigger.payload if trigger else {}
+
+    # Deterministic actioning body grounded directly in the Phase 2 action and facts
     if act == ActionType.USE_RESEARCH_INSIGHT:
+        finding = payload.get("finding_summary") or payload.get("summary") or "preventive procedure protocols"
+        pub = payload.get("publication_name") or payload.get("journal") or "recent clinical study"
         body = (
-            "Here is the draft patient-education WhatsApp note ready to confirm and share: "
-            "'Recent clinical research demonstrates the preventive efficacy of fluoride varnish protocols for mixed dentition.' "
+            f"Here is the patient-education summary on {finding} from {pub} ready to confirm and share. "
             "Confirm to proceed with sending."
         )
     elif act == ActionType.PROMOTE_DELIVERY_OFFER:
+        match_name = payload.get("match_name") or payload.get("event") or "match-day"
         body = (
-            "Here is the delivery promotion campaign draft ready to confirm: "
-            "'Match-day special delivery promotion for tonight.' Confirm when ready to proceed and launch."
+            f"Here is the delivery promotion campaign for {match_name} ready to confirm and launch. "
+            "Confirm when ready to proceed!"
         )
     elif act == ActionType.CUSTOMER_RECALL:
+        cust_name = customer.identity.name if customer else "the customer"
+        svc = payload.get("service_due") or payload.get("service") or "routine recall"
         body = (
-            "Here is the routine recall reminder draft ready for your confirmation. "
+            f"Here is the {svc} recall reminder ready to dispatch to {cust_name}. "
             "Confirm when ready to proceed with dispatch."
         )
     elif act == ActionType.CONTINUE_PLANNING:
+        topic = payload.get("intent_topic") or "catering package"
         body = (
-            "Here is the corporate package draft proposal ready to confirm. "
+            f"Here is the {topic} proposal ready to confirm and finalize. "
             "Confirm when ready to proceed with the next step."
         )
     elif act == ActionType.REFRAME_SEASONAL_DIP:
+        metric = payload.get("metric") or "engagement"
         body = (
-            "Here is the seasonal dip member engagement draft ready to confirm. "
+            f"Here is the seasonal {metric} campaign proposal ready to confirm. "
             "Confirm when ready to proceed with rollout."
         )
     elif act == ActionType.CUSTOMER_WINBACK:
+        cust_name = customer.identity.name if customer else "lapsed customer"
         body = (
-            "Here is the winback outreach draft ready for your confirmation. "
+            f"Here is the winback outreach message ready to dispatch to {cust_name}. "
             "Confirm when ready to proceed."
         )
     elif act == ActionType.ADDRESS_SUPPLY_ALERT:
+        alert_item = payload.get("molecule") or payload.get("item_name") or "affected batch"
         body = (
-            "Here is the batch recall advisory draft ready for your review and confirmation. "
+            f"Here is the verified advisory for {alert_item} ready to dispatch to affected patients. "
             "Confirm when ready to proceed."
         )
     elif act == ActionType.CUSTOMER_REFILL:
+        cust_name = customer.identity.name if customer else "the patient"
+        med = payload.get("medication_name") or payload.get("condition") or "routine refill"
         body = (
-            "Here is the monthly refill reminder draft ready for your confirmation. "
+            f"Here is the {med} refill reminder ready to dispatch to {cust_name}. "
             "Confirm when ready to proceed."
         )
     else:
@@ -216,3 +265,4 @@ def compose_action_continuation(
         template_name=f"continuation_{act.value}_v1",
         template_params=["action_continuation"],
     )
+
