@@ -17,7 +17,7 @@ URL_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Internal database ID pattern (m_001..., c_001..., trg_001...)
+# Internal database ID pattern (e.g. m_..., c_..., trg_...)
 INTERNAL_ID_PATTERN = re.compile(
     r'\b(m_\d{3}_[a-zA-Z0-9_]+|c_\d{3}_[a-zA-Z0-9_]+|trg_\d{3}_[a-zA-Z0-9_]+)\b',
     re.IGNORECASE

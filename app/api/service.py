@@ -199,13 +199,13 @@ class EngineService:
 
         # If transition routed to CONTINUE_EXISTING_ACTION -> invoke Phase 3 composition!
         if transition.route == "CONTINUE_EXISTING_ACTION":
-            mid = merchant_id or "m_001_drmeera_dentist_delhi"
-            m = self.store.get_merchant(mid)
+            entity = self.conversations.get(conversation_id)
+            mid = merchant_id or (entity.merchant_id if entity else None)
+            m = self.store.get_merchant(mid) if mid else None
             if m:
                 cat_slug = m.category_slug
                 cat = self.store.get_category(cat_slug) if cat_slug else None
                 trg = None
-                entity = self.conversations.get(conversation_id)
                 if entity and getattr(entity, "trigger_id", None):
                     trg = self.store.get_trigger(entity.trigger_id)
                 if not trg:
@@ -227,7 +227,7 @@ class EngineService:
                         rationale=composed.rationale,
                     )
 
-            # Fallback if context not loaded
+            # Fallback if no valid merchant identity exists or context not loaded
             return ReplyResponse(
                 action="send",
                 body="Here is the draft ready to confirm. Confirm when ready to proceed!",
